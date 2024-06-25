@@ -20,12 +20,11 @@ Downloading processed data
 
 #Downloading processed metadata
 
-# metadata_url <- "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10828344/bin/11357_2023_986_MOESM7_ESM.tsv"
+metadata_url <- "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10828344/bin/11357_2023_986_MOESM7_ESM.tsv"
 # destination file path
 destfile <- "metadata.tsv"
 # Download the TSV file
-# download.file(metadata_url, destfile, method = "curl")
-# Optionally, read the downloaded TSV file into R
+download.file(metadata_url, destfile, method = "curl")
 metadata <- read.delim(destfile, sep = "\t")
 
 #Downloading ATAC processed data
