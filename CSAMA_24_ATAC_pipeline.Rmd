@@ -29,16 +29,16 @@ metadata <- read.delim(destfile, sep = "\t")
 
 #Downloading ATAC processed data
 
-# atac_data_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE193nnn/GSE193140/suppl/GSE193140%5Fatac%5Fcounts%5Fqval%5F0.05.txt.gz"
+atac_data_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE193nnn/GSE193140/suppl/GSE193140%5Fatac%5Fcounts%5Fqval%5F0.05.txt.gz"
 destfile <- "atac_data.txt"
-# download.file(atac_data_url, destfile, method = "curl")
+download.file(atac_data_url, destfile, method = "curl")
 atac_data <- read.delim(destfile, sep = " ")
 
 #Downloading RNAseq processed data
 
-# rnaseq_data_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE193nnn/GSE193141/suppl/GSE193141%5Frna%5Fcounts%5F011622.csv.gz"
+rnaseq_data_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE193nnn/GSE193141/suppl/GSE193141%5Frna%5Fcounts%5F011622.csv.gz"
 destfile <- "rnaseq_data.txt"
-# download.file(rnaseq_data_url, destfile, method = "curl")
+download.file(rnaseq_data_url, destfile, method = "curl")
 rnaseq_data <- read.delim(destfile, sep = ",")
 
 
