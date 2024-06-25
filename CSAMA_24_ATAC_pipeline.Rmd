@@ -1,0 +1,158 @@
+---
+title: "CSAMA24_ATAC_analysis"
+output: html_document
+date: "2024-06-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(DESeq2)
+
+```
+
+Downloading processed data
+
+```{r Download}
+
+#Downloading processed metadata
+
+# metadata_url <- "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10828344/bin/11357_2023_986_MOESM7_ESM.tsv"
+# destination file path
+destfile <- "metadata.tsv"
+# Download the TSV file
+# download.file(metadata_url, destfile, method = "curl")
+# Optionally, read the downloaded TSV file into R
+metadata <- read.delim(destfile, sep = "\t")
+
+#Downloading ATAC processed data
+
+# atac_data_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE193nnn/GSE193140/suppl/GSE193140%5Fatac%5Fcounts%5Fqval%5F0.05.txt.gz"
+destfile <- "atac_data.txt"
+# download.file(atac_data_url, destfile, method = "curl")
+atac_data <- read.delim(destfile, sep = " ")
+
+#Downloading RNAseq processed data
+
+# rnaseq_data_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE193nnn/GSE193141/suppl/GSE193141%5Frna%5Fcounts%5F011622.csv.gz"
+destfile <- "rnaseq_data.txt"
+# download.file(rnaseq_data_url, destfile, method = "curl")
+rnaseq_data <- read.delim(destfile, sep = ",")
+
+
+```
+
+Processing data for analyis: 
+
+> Remove all samples that do not passes QC for either RNAseq or ATACseq
+> Merge samples in ATAC table which have two _1 and _2 replicated of the same sample.
+
+```{r process}
+
+#Process metadata. Remove the samples which do not pass QC in either of the RNA or ATAC sequencing
+
+metadata_filtered <- metadata %>% filter(PassesQC != FALSE)
+
+hist(metadata_filtered$Age, main = "Histogram_of_age_distribution", xlab = "Age")
+
+#Processing ATAC data
+
+merge_columns_with_mean <- function(atac_data) {
+  # Identify column pairs to merge
+  suffixes <- c("_1", "_2")
+  prefixes <- unique(gsub("(_1|_2)$", "", names(atac_data)[grepl("(_1|_2)$", names(atac_data))]))
+  
+  for (prefix in prefixes) {
+    col_1 <- paste0(prefix, "_1")
+    col_2 <- paste0(prefix, "_2")
+    new_col <- prefix
+    
+    # Check if both columns exist before merging
+    if (all(c(col_1, col_2) %in% names(atac_data))) {
+      atac_data <- atac_data %>%
+        mutate(!!new_col := rowMeans(select(., !!sym(col_1), !!sym(col_2)), na.rm = TRUE)) %>%
+        select(-one_of(col_1, col_2))
+    } else {
+      # If one or both columns do not exist, remove the suffix in the remaining column(s)
+      if (col_1 %in% names(atac_data)) {
+        names(atac_data)[names(atac_data) == col_1] <- new_col
+      }
+      if (col_2 %in% names(atac_data)) {
+        names(atac_data)[names(atac_data) == col_2] <- new_col
+      }
+    }
+  }
+  
+  return(atac_data)
+}
+
+atac_data_merged <- merge_columns_with_mean(atac_data)
+
+columns_to_keep_atac <- c("chr", "start", "end", metadata_filtered$Subject)
+ 
+atac_data_merged_filtered <- atac_data_merged %>% select(all_of(columns_to_keep_atac))
+
+#Processing RNAseq data
+
+names(rnaseq_data) <- gsub("^RNA_", "", names(rnaseq_data))
+
+columns_to_keep_rna <- c("Geneid", "GeneSymbol", metadata_filtered$Subject)
+
+rnaseq_data_filtered <- rnaseq_data %>% select(all_of(columns_to_keep_rna))
+
+
+#Subsettinng aging dataset
+
+metadata_filtered_Y <- metadata_filtered %>% filter(Age >= 0 & Age <= 30)
+metadata_filtered_M <- metadata_filtered %>% filter(Age >= 45 & Age <= 50)
+metadata_filtered_O <- metadata_filtered %>% filter(Age >= 65 & Age <= 75)
+
+
+```
+
+Performing differntial analysis for RNA and ATAC dataset
+
+```{r}
+
+rnaseq_diff <- cbind(rnaseq_data_filtered %>% select(all_of(metadata_filtered_Y$Subject)),
+                     rnaseq_data_filtered %>% select(all_of(metadata_filtered_M$Subject)),
+                     rnaseq_data_filtered %>% select(all_of(metadata_filtered_O$Subject)))
+
+atac_diff <- cbind(atac_data_merged_filtered %>% select(all_of(metadata_filtered_Y$Subject)),
+                     atac_data_merged_filtered %>% select(all_of(metadata_filtered_M$Subject)),
+                     atac_data_merged_filtered %>% select(all_of(metadata_filtered_O$Subject)))
+
+
+colData_rna <- data.frame(
+  row.names = colnames(rnaseq_diff),
+  condition = c(rep("Y", nrow(metadata_filtered_Y)), 
+                rep("M", nrow(metadata_filtered_M)),
+                rep("O", nrow(metadata_filtered_O))
+                ))
+
+colData_atac <- data.frame(
+  row.names = colnames(atac_diff),
+  condition = c(rep("Y", nrow(metadata_filtered_Y)), 
+                rep("M", nrow(metadata_filtered_M)),
+                rep("O", nrow(metadata_filtered_O))
+                ))
+
+
+rnaseq_diff[] <- lapply(rnaseq_diff, as.integer)
+
+atac_diff[] <- lapply(atac_diff, as.integer)
+
+dds_rna <- DESeqDataSetFromMatrix(countData = rnaseq_diff, colData = colData_rna, design = ~ condition)
+
+dds_atac <- DESeqDataSetFromMatrix(countData = atac_diff, colData = colData_atac, design = ~ condition)
+
+dds_rna <- DESeq(dds_rna)
+dds_rna_df <- as.data.frame(results(dds_rna))
+
+dds_atac <- DESeq(dds_atac)
+dds_atac_df <- as.data.frame(results(dds_atac))
+
+```
