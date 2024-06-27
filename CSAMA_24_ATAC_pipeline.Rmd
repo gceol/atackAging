@@ -11,6 +11,8 @@ library(dplyr)
 library(purrr)
 library(ggplot2)
 library(DESeq2)
+library(ggrepel)
+library(biomaRt)
 
 ```
 
@@ -20,25 +22,26 @@ Downloading processed data
 
 #Downloading processed metadata
 
-metadata_url <- "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10828344/bin/11357_2023_986_MOESM7_ESM.tsv"
+# metadata_url <- "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10828344/bin/11357_2023_986_MOESM7_ESM.tsv"
 # destination file path
 destfile <- "metadata.tsv"
 # Download the TSV file
-download.file(metadata_url, destfile, method = "curl")
+# download.file(metadata_url, destfile, method = "curl")
+# Optionally, read the downloaded TSV file into R
 metadata <- read.delim(destfile, sep = "\t")
 
 #Downloading ATAC processed data
 
-atac_data_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE193nnn/GSE193140/suppl/GSE193140%5Fatac%5Fcounts%5Fqval%5F0.05.txt.gz"
+# atac_data_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE193nnn/GSE193140/suppl/GSE193140%5Fatac%5Fcounts%5Fqval%5F0.05.txt.gz"
 destfile <- "atac_data.txt"
-download.file(atac_data_url, destfile, method = "curl")
+# download.file(atac_data_url, destfile, method = "curl")
 atac_data <- read.delim(destfile, sep = " ")
 
 #Downloading RNAseq processed data
 
-rnaseq_data_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE193nnn/GSE193141/suppl/GSE193141%5Frna%5Fcounts%5F011622.csv.gz"
+# rnaseq_data_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE193nnn/GSE193141/suppl/GSE193141%5Frna%5Fcounts%5F011622.csv.gz"
 destfile <- "rnaseq_data.txt"
-download.file(rnaseq_data_url, destfile, method = "curl")
+# download.file(rnaseq_data_url, destfile, method = "curl")
 rnaseq_data <- read.delim(destfile, sep = ",")
 
 
@@ -72,8 +75,8 @@ merge_columns_with_mean <- function(atac_data) {
     # Check if both columns exist before merging
     if (all(c(col_1, col_2) %in% names(atac_data))) {
       atac_data <- atac_data %>%
-        mutate(!!new_col := rowMeans(select(., !!sym(col_1), !!sym(col_2)), na.rm = TRUE)) %>%
-        select(-one_of(col_1, col_2))
+        dplyr::mutate(!!new_col := rowMeans(dplyr::select(., !!sym(col_1), !!sym(col_2)), na.rm = TRUE)) %>%
+        dplyr::select(-one_of(col_1, col_2))
     } else {
       # If one or both columns do not exist, remove the suffix in the remaining column(s)
       if (col_1 %in% names(atac_data)) {
@@ -92,7 +95,8 @@ atac_data_merged <- merge_columns_with_mean(atac_data)
 
 columns_to_keep_atac <- c("chr", "start", "end", metadata_filtered$Subject)
  
-atac_data_merged_filtered <- atac_data_merged %>% select(all_of(columns_to_keep_atac))
+atac_data_merged_filtered <- atac_data_merged %>% dplyr::select(all_of(columns_to_keep_atac))
+atac_data_merged_filtered$regions <- paste(atac_data_merged_filtered$chr, atac_data_merged_filtered$start, atac_data_merged_filtered$end, sep = "_")
 
 #Processing RNAseq data
 
@@ -100,7 +104,7 @@ names(rnaseq_data) <- gsub("^RNA_", "", names(rnaseq_data))
 
 columns_to_keep_rna <- c("Geneid", "GeneSymbol", metadata_filtered$Subject)
 
-rnaseq_data_filtered <- rnaseq_data %>% select(all_of(columns_to_keep_rna))
+rnaseq_data_filtered <- rnaseq_data %>% dplyr::select(all_of(columns_to_keep_rna))
 
 
 #Subsettinng aging dataset
@@ -116,13 +120,13 @@ Performing differntial analysis for RNA and ATAC dataset
 
 ```{r}
 
-rnaseq_diff <- cbind(rnaseq_data_filtered %>% select(all_of(metadata_filtered_Y$Subject)),
-                     rnaseq_data_filtered %>% select(all_of(metadata_filtered_M$Subject)),
-                     rnaseq_data_filtered %>% select(all_of(metadata_filtered_O$Subject)))
+rnaseq_diff <- cbind(rnaseq_data_filtered %>% dplyr::select(all_of(metadata_filtered_Y$Subject)),
+                     rnaseq_data_filtered %>% dplyr::select(all_of(metadata_filtered_M$Subject)),
+                     rnaseq_data_filtered %>% dplyr::select(all_of(metadata_filtered_O$Subject)))
 
-atac_diff <- cbind(atac_data_merged_filtered %>% select(all_of(metadata_filtered_Y$Subject)),
-                     atac_data_merged_filtered %>% select(all_of(metadata_filtered_M$Subject)),
-                     atac_data_merged_filtered %>% select(all_of(metadata_filtered_O$Subject)))
+atac_diff <- cbind(atac_data_merged_filtered %>% dplyr::select(all_of(metadata_filtered_Y$Subject)),
+                     atac_data_merged_filtered %>% dplyr::select(all_of(metadata_filtered_M$Subject)),
+                     atac_data_merged_filtered %>% dplyr::select(all_of(metadata_filtered_O$Subject)))
 
 
 colData_rna <- data.frame(
@@ -150,8 +154,52 @@ dds_atac <- DESeqDataSetFromMatrix(countData = atac_diff, colData = colData_atac
 
 dds_rna <- DESeq(dds_rna)
 dds_rna_df <- as.data.frame(results(dds_rna))
+dds_rna_df <- cbind(dds_rna_df, GeneID = rnaseq_data_filtered$Geneid)
+dds_rna_df$Differential <- "NO"
+dds_rna_df$Differential[dds_rna_df$log2FoldChange > 1 & dds_rna_df$padj < 0.05] <- "UP"
+dds_rna_df$Differential[dds_rna_df$log2FoldChange < -1 & dds_rna_df$padj < 0.05] <- "DOWN"
+# dds_rna_df <- na.omit(dds_rna_df)
+dds_rna_df <- dds_rna_df %>%
+  dplyr::mutate(delabel = ifelse(Differential %in% c("UP", "DOWN"), GeneID, NA))
+
+
+plt_rna <- ggplot(data = dds_rna_df, aes(x = log2FoldChange, y = -log10(padj), col = Differential, label = delabel)) +
+  geom_vline(xintercept = c(-1, 1), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = 0.05, col = "gray", linetype = 'dashed') + 
+  geom_point(size = 2) + 
+  scale_color_manual(values = c("#2400D9", "gray", "#A60021"), 
+                     labels = c("DOWN", "NO", "UP")) + 
+  coord_cartesian(ylim = c(0, 2.5), xlim = c(-4, 4)) + 
+  labs(color = 'RNA-seq', 
+       x = expression("log"[2]*"Fold_Change"), y = expression("-log"[10]*"p-value")) + 
+  scale_x_continuous(breaks = seq(-10, 10, 2)) + 
+  ggtitle('Differential_expressed_mRNA') + 
+  geom_text_repel(max.overlaps = Inf)
+
 
 dds_atac <- DESeq(dds_atac)
 dds_atac_df <- as.data.frame(results(dds_atac))
+dds_atac_df <- cbind(dds_atac_df, regions = atac_data_merged_filtered$regions, chr = atac_data_merged_filtered$chr, start = atac_data_merged_filtered$start, end = atac_data_merged_filtered$end)
+dds_atac_df$Differential <- "NO"
+dds_atac_df$Differential[dds_atac_df$log2FoldChange > 0.1 & dds_atac_df$padj < 0.05] <- "OPEN"
+dds_atac_df$Differential[dds_atac_df$log2FoldChange < -0.1 & dds_atac_df$padj < 0.05] <- "CLOSE"
+# dds_atac_df <- na.omit(dds_atac_df)
+dds_atac_df <- dds_atac_df %>%
+  dplyr::mutate(delabel = ifelse(Differential %in% c("OPEN", "CLOSE"), regions, NA))
+
+
+plt_atac <- ggplot(data = dds_atac_df, aes(x = log2FoldChange, y = -log10(padj), col = Differential, label = delabel)) +
+  geom_vline(xintercept = c(-0.1, 0.1), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = 0.05, col = "gray", linetype = 'dashed') + 
+  geom_point(size = 2) + 
+  scale_color_manual(values = c("#2400D9", "gray", "#A60021"), 
+                     labels = c("CLOSE", "NO", "OPEN")) + 
+  coord_cartesian(ylim = c(0, 1.5), xlim = c(-8, 8)) + 
+  labs(color = 'ATAC_regions', 
+       x = expression("log"[2]*"Fold_Change"), y = expression("-log"[10]*"p-value")) + 
+  scale_x_continuous(breaks = seq(-10, 10, 2)) + 
+  ggtitle('Differential_expressed_ATAC_regions') + 
+  geom_text_repel(max.overlaps = Inf)
+
 
 ```
