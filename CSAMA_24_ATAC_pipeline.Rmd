@@ -13,6 +13,15 @@ library(ggplot2)
 library(DESeq2)
 library(ggrepel)
 library(biomaRt)
+library(GenomicRanges)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(stringr)
+library(tibble)
+library(paletteer)
+library(ggvenn)
+library(pheatmap)
 
 ```
 
@@ -109,9 +118,50 @@ rnaseq_data_filtered <- rnaseq_data %>% dplyr::select(all_of(columns_to_keep_rna
 
 #Subsettinng aging dataset
 
-metadata_filtered_Y <- metadata_filtered %>% filter(Age >= 0 & Age <= 30)
-metadata_filtered_M <- metadata_filtered %>% filter(Age >= 45 & Age <= 50)
-metadata_filtered_O <- metadata_filtered %>% filter(Age >= 65 & Age <= 75)
+metadata_filtered_Y <- metadata_filtered %>% filter(Age >= 0 & Age <= 35)
+metadata_filtered_O <- metadata_filtered %>% filter(Age >= 55 & Age <= 75)
+
+
+```
+
+PCA without variance stabilization 
+
+```{r}
+
+#PCA without variance stabilization 
+
+mat <- as.matrix(atac_data_merged_filtered[ ,4:135])
+pca.res <- prcomp(t(mat), center = TRUE, scale = FALSE)
+percentVar <- round(100*pca.res$sdev^2 / sum(pca.res$sdev^2),1)
+
+pca.df <- data.frame(pca.res$x) %>%  rownames_to_column("Subject") %>% left_join(metadata_filtered[,1:3], by=c("Subject"="Subject"))
+
+plt_atac <-ggplot(pca.df, aes(x=PC1,y=PC2, shape=Sex, color=Age))+
+    geom_point(alpha=0.7,size=7)+
+    xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+    ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+    geom_text_repel(aes(label = Subject),
+                    size = 3) +
+    labs(title = "PCA_atac",
+         subtitle = paste("n =", nrow(mat))) +
+    theme(legend.position = "right")
+
+
+mat <- as.matrix(rnaseq_data_filtered[ ,3:134])
+pca.res <- prcomp(t(mat), center = TRUE, scale = FALSE)
+percentVar <- round(100*pca.res$sdev^2 / sum(pca.res$sdev^2),1)
+
+pca.df <- data.frame(pca.res$x) %>%  rownames_to_column("Subject") %>% left_join(metadata_filtered[,1:3], by=c("Subject"="Subject"))
+
+plt_rna <-ggplot(pca.df, aes(x=PC2,y=PC3, shape=Sex, color=Age))+
+    geom_point(alpha=0.7,size=7)+
+    xlab(paste0("PC2: ",percentVar[2],"% variance")) +
+    ylab(paste0("PC3: ",percentVar[3],"% variance")) +
+    geom_text_repel(aes(label = Subject),
+                    size = 3) +
+    labs(title = "PCA_rna",
+         subtitle = paste("n =", nrow(mat))) +
+    theme(legend.position = "right")
 
 
 ```
@@ -121,36 +171,34 @@ Performing differntial analysis for RNA and ATAC dataset
 ```{r}
 
 rnaseq_diff <- cbind(rnaseq_data_filtered %>% dplyr::select(all_of(metadata_filtered_Y$Subject)),
-                     rnaseq_data_filtered %>% dplyr::select(all_of(metadata_filtered_M$Subject)),
                      rnaseq_data_filtered %>% dplyr::select(all_of(metadata_filtered_O$Subject)))
 
 atac_diff <- cbind(atac_data_merged_filtered %>% dplyr::select(all_of(metadata_filtered_Y$Subject)),
-                     atac_data_merged_filtered %>% dplyr::select(all_of(metadata_filtered_M$Subject)),
                      atac_data_merged_filtered %>% dplyr::select(all_of(metadata_filtered_O$Subject)))
 
 
 colData_rna <- data.frame(
   row.names = colnames(rnaseq_diff),
   condition = c(rep("Y", nrow(metadata_filtered_Y)), 
-                rep("M", nrow(metadata_filtered_M)),
                 rep("O", nrow(metadata_filtered_O))
                 ))
+colData_rna <- cbind(colData_rna, Sex = as.factor(c(metadata_filtered_Y$Sex, metadata_filtered_O$Sex)))
+
 
 colData_atac <- data.frame(
   row.names = colnames(atac_diff),
   condition = c(rep("Y", nrow(metadata_filtered_Y)), 
-                rep("M", nrow(metadata_filtered_M)),
                 rep("O", nrow(metadata_filtered_O))
                 ))
-
+colData_atac <- cbind(colData_atac, Sex = as.factor(c(metadata_filtered_Y$Sex, metadata_filtered_O$Sex)))
 
 rnaseq_diff[] <- lapply(rnaseq_diff, as.integer)
 
 atac_diff[] <- lapply(atac_diff, as.integer)
 
-dds_rna <- DESeqDataSetFromMatrix(countData = rnaseq_diff, colData = colData_rna, design = ~ condition)
+dds_rna <- DESeqDataSetFromMatrix(countData = rnaseq_diff, colData = colData_rna, design = ~ Sex + condition)
 
-dds_atac <- DESeqDataSetFromMatrix(countData = atac_diff, colData = colData_atac, design = ~ condition)
+dds_atac <- DESeqDataSetFromMatrix(countData = atac_diff, colData = colData_atac, design = ~ Sex + condition)
 
 dds_rna <- DESeq(dds_rna)
 dds_rna_df <- as.data.frame(results(dds_rna))
@@ -169,7 +217,7 @@ plt_rna <- ggplot(data = dds_rna_df, aes(x = log2FoldChange, y = -log10(padj), c
   geom_point(size = 2) + 
   scale_color_manual(values = c("#2400D9", "gray", "#A60021"), 
                      labels = c("DOWN", "NO", "UP")) + 
-  coord_cartesian(ylim = c(0, 2.5), xlim = c(-4, 4)) + 
+  coord_cartesian(ylim = c(0, 10), xlim = c(-2.5, 2.5)) + 
   labs(color = 'RNA-seq', 
        x = expression("log"[2]*"Fold_Change"), y = expression("-log"[10]*"p-value")) + 
   scale_x_continuous(breaks = seq(-10, 10, 2)) + 
@@ -181,25 +229,119 @@ dds_atac <- DESeq(dds_atac)
 dds_atac_df <- as.data.frame(results(dds_atac))
 dds_atac_df <- cbind(dds_atac_df, regions = atac_data_merged_filtered$regions, chr = atac_data_merged_filtered$chr, start = atac_data_merged_filtered$start, end = atac_data_merged_filtered$end)
 dds_atac_df$Differential <- "NO"
-dds_atac_df$Differential[dds_atac_df$log2FoldChange > 0.1 & dds_atac_df$padj < 0.05] <- "OPEN"
-dds_atac_df$Differential[dds_atac_df$log2FoldChange < -0.1 & dds_atac_df$padj < 0.05] <- "CLOSE"
+dds_atac_df$Differential[dds_atac_df$log2FoldChange > 1.0 & dds_atac_df$padj < 0.05] <- "OPEN"
+dds_atac_df$Differential[dds_atac_df$log2FoldChange < -0.5 & dds_atac_df$padj < 0.05] <- "CLOSE"
 # dds_atac_df <- na.omit(dds_atac_df)
 dds_atac_df <- dds_atac_df %>%
   dplyr::mutate(delabel = ifelse(Differential %in% c("OPEN", "CLOSE"), regions, NA))
 
 
 plt_atac <- ggplot(data = dds_atac_df, aes(x = log2FoldChange, y = -log10(padj), col = Differential, label = delabel)) +
-  geom_vline(xintercept = c(-0.1, 0.1), col = "gray", linetype = 'dashed') +
+  geom_vline(xintercept = c(-0.5, 1.0), col = "gray", linetype = 'dashed') +
   geom_hline(yintercept = 0.05, col = "gray", linetype = 'dashed') + 
   geom_point(size = 2) + 
   scale_color_manual(values = c("#2400D9", "gray", "#A60021"), 
                      labels = c("CLOSE", "NO", "OPEN")) + 
-  coord_cartesian(ylim = c(0, 1.5), xlim = c(-8, 8)) + 
+  coord_cartesian(ylim = c(0, 10), xlim = c(-4.5, 4)) + 
   labs(color = 'ATAC_regions', 
        x = expression("log"[2]*"Fold_Change"), y = expression("-log"[10]*"p-value")) + 
   scale_x_continuous(breaks = seq(-10, 10, 2)) + 
   ggtitle('Differential_expressed_ATAC_regions') + 
   geom_text_repel(max.overlaps = Inf)
+
+
+```
+
+PCA with variance stabilization and heatmap for top 30 most significant candidates
+
+```{r}
+
+vsd_rna <- DESeq2::vst(dds_rna, blind = FALSE)
+
+vsd_atac <- DESeq2::vst(dds_atac, blind = FALSE)
+
+DESeq2::plotPCA(vsd_rna, intgroup = "condition", ntop=500)
+
+DESeq2::plotPCA(vsd_atac, intgroup = "condition", ntop=500)
+
+
+res_rna <- DESeq2::results(dds_rna)
+stopifnot(rownames(vsd_rna) == rownames(res_rna))
+mat_rna <- assay(vsd_rna)
+rownames(mat_rna) <- ifelse(!is.na(rowData(vsd_rna)$SYMBOL), rowData(vsd_rna)$SYMBOL, rownames(vsd_rna))
+mat_rna <- mat_rna[head(order(res_rna$padj), 30), ]
+mat_rna <- mat_rna - rowMeans(mat_rna)
+df_rna <- as.data.frame(colData(vsd_rna)[, c("condition", "Sex"), drop = FALSE])
+rna_hm <- pheatmap(mat_rna, annotation_col = df_rna,  cluster_cols = FALSE)
+
+
+res_atac <- DESeq2::results(dds_atac)
+stopifnot(rownames(vsd_atac) == rownames(res_atac))
+mat_atac <- assay(vsd_atac)
+rownames(mat_atac) <- ifelse(!is.na(rowData(vsd_atac)$SYMBOL), rowData(vsd_atac)$SYMBOL, rownames(vsd_atac))
+mat_atac <- mat_atac[head(order(res_atac$padj), 30), ]
+mat_atac <- mat_atac - rowMeans(mat_atac)
+df_atac <- as.data.frame(colData(vsd_atac)[, c("condition", "Sex"), drop = FALSE])
+atac_hm <- pheatmap(mat_atac, annotation_col = df_atac,  cluster_cols = FALSE)
+
+
+```
+
+Looking for genes whose TSS fell in +/-1kb of differntial ATAC region
+
+```{r}
+
+filtered_dds_atac_df <- dds_atac_df %>% filter(padj < 0.05, log2FoldChange < -0.5 | log2FoldChange > 1.0)
+
+#Add 1kb plus minus in differential expressed regions
+sig_atac_regions_gr <- GRanges(
+  seqnames = filtered_dds_atac_df$chr,
+  ranges = IRanges(start = filtered_dds_atac_df$start, end = filtered_dds_atac_df$end))
+
+sig_atac_regions_extended <- as.data.frame(GRanges(seqnames = seqnames(sig_atac_regions_gr),
+                       ranges = IRanges(start = start(sig_atac_regions_gr) - 1000,
+                                        end = end(sig_atac_regions_gr) + 1000)))
+
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+target_genes <- getBM(
+  attributes = c("chromosome_name", "start_position", "end_position", "external_gene_name"),
+  filters = c("chromosome_name", "start", "end"),
+  values = list(gsub("[^0-9]", "", sig_atac_regions_extended$seqnames), sig_atac_regions_extended$start, sig_atac_regions_extended$end),
+  mart = ensembl
+)
+target_genes <- target_genes[!is.na(target_genes$external_gene_name) & target_genes$external_gene_name != "", ]
+
+
+#enrichment analysis for target gene candidates 
+
+entrez_ids <- mapIds(org.Hs.eg.db, keys = unique(target_genes$external_gene_name), column = "ENTREZID", keytype = "SYMBOL", multiVals = "first")
+entrez_ids <- na.omit(entrez_ids)
+
+ego <- enrichGO(gene       = entrez_ids,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = "ENTREZID",
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+cnetplot(ego, showCategory=5)
+
+#overlap with diff expressed genes from RNAseq
+
+filtered_dds_rna_df <- dds_rna_df %>% filter(padj < 0.05, log2FoldChange < -1 | log2FoldChange > 1)
+
+filtered_dds_rna_df_genes <- mapIds(org.Hs.eg.db, keys = unique(filtered_dds_rna_df$GeneID), column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+
+match <- intersect(as.character(filtered_dds_rna_df_genes), target_genes$external_gene_name)
+
+venn <- list("ATAC_targets" = filtered_dds_rna_df_genes, "Differentially_expressed_genes" = target_genes$external_gene_name)
+
+ggvenn(venn, 
+  fill_color = c("#0073C2FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 3)
 
 
 ```
